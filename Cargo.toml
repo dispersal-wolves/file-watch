@@ -1,0 +1,15 @@
+[package]
+name = "dispersal-file-watch"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Local SHA-256 file integrity baselines"
+
+[[bin]]
+name = "file-watch"
+path = "src/main.rs"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
