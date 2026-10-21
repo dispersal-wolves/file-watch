@@ -63,15 +63,36 @@ fn matches_pattern(path: &str, pattern: &str) -> bool {
     path == pattern || path.split('/').any(|part| part == pattern)
 }
 
+/// Treats "not found" as a file that disappeared between listing and reading.
+fn unless_missing<T>(result: io::Result<T>) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 fn snapshot(root: &Path, excludes: &[String]) -> io::Result<BTreeMap<String, Entry>> {
     let root = root.canonicalize()?;
     let mut output = BTreeMap::new();
     let mut pending = vec![root.clone()];
     while let Some(directory) = pending.pop() {
-        for item in fs::read_dir(directory)? {
-            let item = item?;
+        let listing = if directory == root {
+            fs::read_dir(&directory)?
+        } else {
+            let Some(listing) = unless_missing(fs::read_dir(&directory))? else {
+                continue;
+            };
+            listing
+        };
+        for item in listing {
+            let Some(item) = unless_missing(item)? else {
+                continue;
+            };
             let path = item.path();
-            let metadata = fs::symlink_metadata(&path)?;
+            let Some(metadata) = unless_missing(fs::symlink_metadata(&path))? else {
+                continue;
+            };
             if metadata.file_type().is_symlink() {
                 continue;
             }
@@ -91,12 +112,15 @@ fn snapshot(root: &Path, excludes: &[String]) -> io::Result<BTreeMap<String, Ent
                     .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
                     .map(|value| value.as_nanos())
                     .unwrap_or(0);
+                let Some(sha256) = unless_missing(hash_file(&path))? else {
+                    continue;
+                };
                 output.insert(
                     relative,
                     Entry {
                         size: metadata.len(),
                         modified_ns,
-                        sha256: hash_file(&path)?,
+                        sha256,
                     },
                 );
             }
@@ -422,6 +446,18 @@ mod tests {
             render(&changes, true),
             "{\"schema\":\"dispersal-wolves/file-watch/v1\",\"changes\":[{\"path\":\"a\\tb\\u0001\\\"\\\\\\n.txt\",\"kind\":\"added\"}]}"
         );
+    }
+    #[test]
+    fn vanished_files_are_skipped_not_fatal() {
+        let missing = std::env::temp_dir().join("file-watch-test-does-not-exist");
+        assert!(unless_missing(hash_file(&missing)).unwrap().is_none());
+        assert!(
+            unless_missing(fs::symlink_metadata(&missing))
+                .unwrap()
+                .is_none()
+        );
+        let denied: io::Result<()> = Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        assert!(unless_missing(denied).is_err());
     }
     #[test]
     fn path_encoding_round_trip() {
