@@ -215,10 +215,17 @@ fn kind_name(kind: &ChangeKind) -> &'static str {
 }
 fn json_escape(value: &str) -> String {
     value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
+        .chars()
+        .map(|character| match character {
+            '\\' => "\\\\".into(),
+            '"' => "\\\"".into(),
+            '\n' => "\\n".into(),
+            '\r' => "\\r".into(),
+            '\t' => "\\t".into(),
+            control if u32::from(control) < 0x20 => format!("\\u{:04x}", u32::from(control)),
+            other => other.to_string(),
+        })
+        .collect()
 }
 fn render(changes: &[Change], json: bool) -> String {
     if json {
@@ -395,6 +402,17 @@ mod tests {
             changes
                 .iter()
                 .any(|c| c.path == "gone" && c.kind == ChangeKind::Deleted)
+        );
+    }
+    #[test]
+    fn json_escapes_control_characters() {
+        let changes = [Change {
+            path: "a\tb\u{1}\"\\\n.txt".into(),
+            kind: ChangeKind::Added,
+        }];
+        assert_eq!(
+            render(&changes, true),
+            "{\"schema\":\"dispersal-wolves/file-watch/v1\",\"changes\":[{\"path\":\"a\\tb\\u0001\\\"\\\\\\n.txt\",\"kind\":\"added\"}]}"
         );
     }
     #[test]
