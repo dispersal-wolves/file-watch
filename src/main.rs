@@ -31,9 +31,17 @@ struct Change {
 
 fn hash_file(path: &Path) -> io::Result<String> {
     let mut file = fs::File::open(path)?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    Ok(sha256::hex(&bytes))
+    let mut hasher = sha256::Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => hasher.update(&buffer[..read]),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(sha256::to_hex(&hasher.finish()))
 }
 
 fn normalized_relative(root: &Path, path: &Path) -> io::Result<String> {
